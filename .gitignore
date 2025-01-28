@@ -1,0 +1,33 @@
+
+bin/
+obj/
+*.user
+*.orig
+.DS_Store
+
+# ide stuff
+Wireclub.suo
+.vs/
+.vscode/
+launchSettings.json
+
+# runtime data
+App_Data/
+log.txt
+
+# js/css artifacts
+build/
+
+# node packages
+node_modules
+.fake
+
+# rust artifacts
+target/
+bindings/
+
+# wasm
+pkg/
+
+# tool binaries
+tools/

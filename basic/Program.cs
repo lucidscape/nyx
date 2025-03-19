@@ -60,7 +60,10 @@ try
     var task = "find out what the current weather is in the user's current location";
 
     var plan = await agent.Run(task);
-    await executor.Run(plan);
+    if (plan.Validate())
+    {
+        await executor.Run(plan);
+    }
 }
 catch (Exception ex)
 {

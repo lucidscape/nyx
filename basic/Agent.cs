@@ -1,6 +1,9 @@
 
+using System.Data.SqlTypes;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Schema;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using OllamaSharp;
 using Spectre.Console;
@@ -17,7 +20,7 @@ static class OllamaExtensions {
 		
         var modelsWithBackChoice = models.OrderBy(m => m.Name).Select(m => m.Name).ToList();
         
-        if (modelsWithBackChoice.FirstOrDefault(f => f.Contains("qwq")) is string model)
+        if (modelsWithBackChoice.FirstOrDefault(f => f.Contains("qwen2.5-coder")) is string model)
         {
             return model;
         }
@@ -29,6 +32,10 @@ static class OllamaExtensions {
         
         return modelsWithBackChoice.First();
 	}
+    
+    // public static async Task<string> GetResult() {
+        
+    // }
 }
 
 class Agent(IOllamaApiClient ollama) {
@@ -138,7 +145,39 @@ a series of statements to solve the problem.
     }
 }
 
-record TaskPlan(List<string> Steps);
+record Variable(string Name, string Description) {
+    override public string ToString() => $"{Name} ({Description})";
+}
+
+record Step(string Description, List<Variable> Inputs, List<Variable> Outputs) {
+    override public string ToString() => $"{Description}\n  Inputs: {string.Join(", ", Inputs)}\n  Outputs: {string.Join(", ", Outputs)}";
+}
+
+record TaskPlan(List<Step> Steps) {
+     public bool Validate() {
+        var variables = new HashSet<string>();
+        foreach (var step in Steps)
+        {
+            foreach (var input in step.Inputs   ) 
+            {
+                if (!variables.Contains(input.Name)) 
+                {
+                    Console.WriteLine($"[!] [plan validation] step '{step.Deconstruct}' input '{input}' does not exist");
+                    return false;
+                }
+            }
+        
+            foreach (var output in step.Outputs) 
+            {
+                variables.Add(output.Name);
+            }
+        }
+
+        Console.WriteLine("[plan validation] validated OK");
+        
+        return true;
+     }
+}
 
 class TaskPlanner(IOllamaApiClient ollama) {
 
@@ -146,6 +185,8 @@ class TaskPlanner(IOllamaApiClient ollama) {
 You are an AI agent that given a single task generates a sequence of steps to solve the task.
 You should not consider any concrete solutions to tasks, only the general series of steps required that another AI agent can then execute.
 Do not number or decorate or use bullet points for the steps.
+Each step should specify the input and output variables of each step.
+Output variables should be used as input variables in subsequent steps.
 
 For example if you were asked "what is the birthday of the current Pope?" you may respond with:
 [
@@ -168,23 +209,9 @@ For example if you were asked "what is the birthday of the current Pope?" you ma
         
         Console.ForegroundColor = ConsoleColor.Blue;
         
-        var format = new
-            {
-                type = "object",
-                properties = new
-                {
-                    steps = new
-                    {
-                        type = "array",
-                        items = new {
-                            type = "string"
-                        }
-                    },
-                },
-                required = new[] { "steps" }
-            };
+        JsonSerializerOptions options = JsonSerializerOptions.Default;
         
-        await foreach (var answerToken in chat.SendAsync(task, null, null, format))
+        await foreach (var answerToken in chat.SendAsync(task, null, null, options.GetJsonSchemaAsNode(typeof(TaskPlan))))
         {
             Console.Write($"{answerToken}");
             response.Append(answerToken);
@@ -197,11 +224,29 @@ For example if you were asked "what is the birthday of the current Pope?" you ma
         var responseObject = JsonSerializer.Deserialize<TaskPlan>(response.ToString(), new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ??
                                 throw new Exception("Failed to deserialize response");
         
-        Console.WriteLine($"{responseObject}");
+        Console.WriteLine("steps:");
+        foreach (var step in responseObject.Steps)
+        {
+            Console.WriteLine($" {step}");
+        }
+
+        // Console.WriteLine("inputs:");
+        // foreach (var input in responseObject.Inputs)
+        // {
+        //     Console.WriteLine($" {input}");
+        // }
+        
+        // Console.WriteLine("outputs:");
+        // foreach (var output in responseObject.Outputs)
+        // {
+        //     Console.WriteLine($" {output}");
+        // }
         
         return responseObject;
     }
 }
+
+record ExecutorAction(string Action, string Data);
 
 class PlanExecutor(IOllamaApiClient ollama) {
     readonly Agent agent = new(ollama);
@@ -209,11 +254,11 @@ class PlanExecutor(IOllamaApiClient ollama) {
     public async Task Run(TaskPlan plan) {
         ollama.SelectedModel = await ollama.SelectModel();
         Console.WriteLine($"[planex] using model {ollama.SelectedModel}");
-
-        foreach (var step in plan.Steps) 
-        {
-            Console.WriteLine($"[planex] executing step: {step}");
-            await agent.Run(step);
-        }
+        
+        // foreach (var step in plan.Steps) 
+        // {
+        //     Console.WriteLine($"[planex] executing step: {step}");
+        //     await agent.Run(step.Description);
+        // }
     }
 }

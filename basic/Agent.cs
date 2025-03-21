@@ -20,7 +20,7 @@ static class OllamaExtensions {
 		
         var modelsWithBackChoice = models.OrderBy(m => m.Name).Select(m => m.Name).ToList();
         
-        if (modelsWithBackChoice.FirstOrDefault(f => f.Contains("qwen2.5-coder")) is string model)
+        if (modelsWithBackChoice.FirstOrDefault(f => f.Contains("llama3.3")) is string model)
         {
             return model;
         }
@@ -149,27 +149,24 @@ record Variable(string Name, string Description) {
     override public string ToString() => $"{Name} ({Description})";
 }
 
-record Step(string Description, List<Variable> Inputs, List<Variable> Outputs) {
-    override public string ToString() => $"{Description}\n  Inputs: {string.Join(", ", Inputs)}\n  Outputs: {string.Join(", ", Outputs)}";
+record Step(string Description, List<string> Inputs, string Output) {
+    override public string ToString() => $"{Description}\n  Inputs: {string.Join(", ", Inputs)}\n  Output: {Output}";
 }
 
-record TaskPlan(List<Step> Steps) {
+record TaskPlan(List<Step> Steps, List<Variable> Variables) {
      public bool Validate() {
-        var variables = new HashSet<string>();
+        var variables = Variables.Select(v => v.Name).ToHashSet();
+        
+        
         foreach (var step in Steps)
         {
-            foreach (var input in step.Inputs   ) 
+            foreach (var (variable, kind) in step.Inputs.Select(i => (i, "input")).Union([(step.Output, "output")]))
             {
-                if (!variables.Contains(input.Name)) 
+                if (!variables.Contains(variable)) 
                 {
-                    Console.WriteLine($"[!] [plan validation] step '{step.Deconstruct}' input '{input}' does not exist");
+                    Console.WriteLine($"[!] [plan validation] step '{step.Deconstruct}' {kind} '{variable}' does not exist");
                     return false;
                 }
-            }
-        
-            foreach (var output in step.Outputs) 
-            {
-                variables.Add(output.Name);
             }
         }
 
@@ -189,10 +186,16 @@ Each step should specify the input and output variables of each step.
 Output variables should be used as input variables in subsequent steps.
 
 For example if you were asked "what is the birthday of the current Pope?" you may respond with:
-[
-    "Find out who the current Pope is",
-    "Find out the birthday of that person"
-]
+{ 
+    "Steps": [
+        { Description: "Find out who the current Pope is", "Inputs": [], "Outputs": ["currentPope"] },
+        { Description: "Find out the birthday of $currentPope", "Inputs": ["currentPope"], "Outputs": ["birthday"] }
+    ],
+    "Variables": [
+        { Name = "currentPope", Description = "The current Pope" },
+        { Name = "birthday", Description = "The birthday of the current Pope" }
+    ]
+}
 
 """;
 
@@ -246,19 +249,95 @@ For example if you were asked "what is the birthday of the current Pope?" you ma
     }
 }
 
-record ExecutorAction(string Action, string Data);
+class ExecState {
+    public Dictionary<string, string> Variables = [];
+}
+
+public class ExecTools {
+    /// <summary>
+    /// Get the current location of the user
+    /// </summary>
+    [OllamaTool]
+    public static string GetLocation() => "Vancouver, BC, Canada";
+
+
+    /// <summary>
+    /// Get the weather at the given location
+    /// </summary>
+    [OllamaTool]
+    public static string GetWeather(string location) {
+        Console.WriteLine($"[tool] getting weather for {location}");
+        return  "Rainy, 10C";
+    }
+}
+
+class StepExecutor(IOllamaApiClient ollama) {
+    
+    protected virtual string SystemPrompt => """
+        Solve the given task and give a minimal response. The response should be a single value that can be assigned to a variable for later use.
+        The response should be given without any context from the prompt, just as small a value as possible.
+    """;
+
+    public async Task<string> Run(Step step, ExecState state) {
+        ollama.SelectedModel = await ollama.SelectModel();
+        // Console.WriteLine($"[exec] using model {ollama.SelectedModel}");
+        
+        var chat = new Chat(ollama, SystemPrompt);
+
+        var response = new StringBuilder();
+    
+        // Console.WriteLine($"[exec] >>");
+        // response.Clear();
+        
+        Console.ForegroundColor = ConsoleColor.Blue;
+        
+        var prompt = new StringBuilder(step.Description);
+        
+        if (step.Inputs.Count > 0)
+        {
+            prompt.Append("\nVariables:\n");
+            foreach (var input in step.Inputs)
+            {
+                prompt.Append($"${input} = \"{state.Variables[input]}\"\n");
+            }
+        }
+        
+        // Console.WriteLine(prompt);
+        
+        await foreach (var answerToken in chat.SendAsync(prompt.ToString(), [
+            new GetLocationTool(),
+            new GetWeatherTool()
+        ]))
+        {
+            Console.Write($"{answerToken}");
+            response.Append(answerToken);
+        }
+        
+        Console.WriteLine();
+        
+        return response.ToString();
+    }
+}
+
 
 class PlanExecutor(IOllamaApiClient ollama) {
-    readonly Agent agent = new(ollama);
-
     public async Task Run(TaskPlan plan) {
         ollama.SelectedModel = await ollama.SelectModel();
         Console.WriteLine($"[planex] using model {ollama.SelectedModel}");
         
-        // foreach (var step in plan.Steps) 
-        // {
-        //     Console.WriteLine($"[planex] executing step: {step}");
-        //     await agent.Run(step.Description);
-        // }
+        var state = new ExecState();
+        
+        foreach (var step in plan.Steps) 
+        {
+            AnsiConsole.Write(new Rule().LeftJustified());
+            AnsiConsole.WriteLine();
+            
+            Console.ForegroundColor = ConsoleColor.White;
+        
+            Console.WriteLine($"[planex] executing step: {step}");
+            var executor = new StepExecutor(ollama);
+            var result = await executor.Run(step, state);
+            state.Variables[step.Output] = result;
+        }
     }
 }

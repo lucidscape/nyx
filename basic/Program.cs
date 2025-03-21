@@ -4,7 +4,7 @@ using Spectre.Console;
 
 Console.ResetColor();
 
-AnsiConsole.Write(new Rule("OllamaSharp Api Console").LeftJustified());
+AnsiConsole.Write(new Rule("nyx").LeftJustified());
 AnsiConsole.WriteLine();
 
 OllamaApiClient? ollama = null;
@@ -58,6 +58,7 @@ var executor = new PlanExecutor(ollama!);
 try
 {
     var task = "find out what the current weather is in the user's current location";
+    // var task = "calculate 10 * 5 + 4";
 
     var plan = await agent.Run(task);
     if (plan.Validate())
@@ -70,6 +71,14 @@ catch (Exception ex)
     Console.WriteLine($"error: {ex}");
 }
 
+// var exec = new StepExecutor(ollama!);
+
+// var execState = new ExecState();
+// await exec.Run(new Step("Get the user's current location", [], ["location"]), execState);
+
+// var execState = new ExecState();
+// execState.Variables.Add("location", "Vancouver, BC, Canada");
+// await exec.Run(new Step("Get the weather in $location", ["location"], []), execState);
 
 
 // using Microsoft.CodeAnalysis;
